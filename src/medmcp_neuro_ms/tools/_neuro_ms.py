@@ -52,9 +52,7 @@ def gpu_present() -> bool:
     if any(Path("/dev").glob("nvidia[0-9]*")):
         return True
     try:
-        out = subprocess.run(
-            ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=10
-        )
+        out = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=10)
     except (FileNotFoundError, subprocess.SubprocessError):
         return False
     return out.returncode == 0 and "GPU" in out.stdout

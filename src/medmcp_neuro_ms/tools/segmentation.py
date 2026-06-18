@@ -134,12 +134,18 @@ def segment_ms_lesions(
         lst_tmp = Path(scratch) / "tmp"
         cmd = [
             lst,
-            "--t1", str(t1_path),
-            "--flair", str(flair_path),
-            "--output", str(lst_out),
-            "--temp", str(lst_tmp),
-            "--device", resolved_device,
-            "--threads", str(threads),
+            "--t1",
+            str(t1_path),
+            "--flair",
+            str(flair_path),
+            "--output",
+            str(lst_out),
+            "--temp",
+            str(lst_tmp),
+            "--device",
+            resolved_device,
+            "--threads",
+            str(threads),
         ]
         if already_stripped:
             cmd.append("--stripped")
