@@ -3,9 +3,9 @@ requires = ["uv_build"]
 build-backend = "uv_build"
 
 [project]
-name = "medmcp-template"
-version = "0.0.0"
-description = "Template for medmcp ecosystem packages (stacks, foundations, tools)."
+name = "medmcp-neuro-ms"
+version = "0.1.0"
+description = "MS white-matter lesion segmentation (LST-AI) for the medmcp ecosystem."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
@@ -25,26 +25,28 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
-keywords = ["medical", "image processing", "ai-agent", "mcp"]
+keywords = ["medical", "image processing", "ai-agent", "mcp", "multiple sclerosis", "lesion segmentation", "lst-ai"]
 requires-python = ">=3.12"
+# The wrapper venv stays light: just MCP. LST-AI (ONNX + picsl-greedy + HD-BET v2) and
+# its torch/onnxruntime-gpu stack are installed into an isolated venv (/opt/lst-venv) by
+# the Dockerfile and invoked as the `lst` subprocess — see tools/_neuro_ms.py.
 dependencies = [
     "mcp>=1.0",
-    # "medmcp-dicom>=0.1",  # uncomment once medmcp-dicom is available
 ]
 
 [project.scripts]
-medmcp-template = "medmcp_template.server:main"
+medmcp-neuro-ms = "medmcp_neuro_ms.server:main"
 
 [project.entry-points."medmcp.stacks"]
-medmcp-template = "medmcp_template.server:server_config"
+medmcp-neuro-ms = "medmcp_neuro_ms.server:server_config"
 
 # How a downstream "core" package declares this package as an optional extra:
 # [project.optional-dependencies]
 # neuro = ["medmcp-neuro>=0.1"]
 
 [project.urls]
-Homepage = "https://github.com/medmcp/medmcp-template"
-Issues = "https://github.com/medmcp/medmcp-template/issues"
+Homepage = "https://github.com/medmcp/medmcp-neuro-ms"
+Issues = "https://github.com/medmcp/medmcp-neuro-ms/issues"
 
 # Pin git-sourced medmcp packages during development:
 # [tool.uv.sources]

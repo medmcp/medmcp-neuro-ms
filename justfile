@@ -60,6 +60,6 @@ fix:
 
 # Build this stack's container image (stdio MCP server). Requires medmcp-base —
 # build it once from the core repo: `just docker-base` in medmcp-dev. The core
-# launches this image on demand via a stacks.d/medmcp-template.toml manifest.
-docker-build TAG="medmcp-template:dev":
+# launches this image on demand via a stacks.d/medmcp-neuro-ms.toml manifest.
+docker-build TAG="medmcp-neuro-ms:dev":
     docker build -t {{TAG}} .

@@ -205,3 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local CA certs for builds behind a TLS-intercepting (MITM) proxy.
+certs/*
+!certs/.gitkeep

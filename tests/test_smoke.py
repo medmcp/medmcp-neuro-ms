@@ -2,8 +2,8 @@
 
 import pytest
 
-from medmcp_template import __version__
-from medmcp_template.server import mcp
+from medmcp_neuro_ms import __version__
+from medmcp_neuro_ms.server import mcp
 
 
 def test_version_is_string() -> None:
