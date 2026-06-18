@@ -12,6 +12,7 @@ provider when a GPU is available; registration (greedy) is CPU either way.
 """
 
 import csv
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -64,21 +65,31 @@ class RegionListResult(TypedDict):
 
 
 def _parse_total_stats(path: Path) -> tuple[int, float]:
-    """Parse lesion_stats.csv -> (lesion_count, total_volume_mm3)."""
+    """Parse lesion_stats.csv -> (lesion_count, total_volume_mm3).
+
+    Columns: Num_Lesions, Num_Vox, Lesion_Volume (header + one data row).
+    """
     with open(path, newline="") as fh:
-        row = next(csv.DictReader(fh), {})
-    return int(float(row.get("Num_Lesions", 0))), float(row.get("Lesion_Volume", 0.0))
+        rows = list(csv.reader(fh))
+    if len(rows) < 2:
+        return 0, 0.0
+    col = {name: i for i, name in enumerate(rows[0])}
+    data = rows[1]
+    return int(float(data[col["Num_Lesions"]])), float(data[col["Lesion_Volume"]])
 
 
 def _parse_region_stats(path: Path) -> dict[str, float]:
-    """Parse annotated_lesion_stats.csv -> {region: volume_mm3}."""
-    volumes: dict[str, float] = {}
+    """Parse annotated_lesion_stats.csv -> {region: volume_mm3}.
+
+    Columns: Region, Num_Lesions, Num_Vox, Lesion_Volume (header + one row per region).
+    """
     with open(path, newline="") as fh:
-        for row in csv.DictReader(fh):
-            region = row.get("Region", "")
-            if region:
-                volumes[region] = float(row.get("Lesion_Volume", 0.0))
-    return volumes
+        rows = list(csv.reader(fh))
+    if len(rows) < 2:
+        return {}
+    col = {name: i for i, name in enumerate(rows[0])}
+    region_i, vol_i = col["Region"], col["Lesion_Volume"]
+    return {row[region_i]: float(row[vol_i]) for row in rows[1:] if row}
 
 
 def segment_ms_lesions(
@@ -240,6 +251,4 @@ def list_ms_lesion_regions() -> RegionListResult:
 
 def _copy(src: Path, dst: Path) -> None:
     """Copy src to dst (small helper to keep the flow readable)."""
-    import shutil
-
     shutil.copy(src, dst)

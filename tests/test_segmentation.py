@@ -1,20 +1,25 @@
-"""Tests for the MS lesion segmentation tool.
+"""Tests for the LST-AI-backed MS lesion segmentation tool.
 
-The tool shells out to the LST-AI ``lst`` CLI; tests mock the subprocess (and the
-device probe) so they run without LST-AI, a GPU, or model weights — they exercise the
-wrapper's argument building, success/failure handling, and result parsing.
+The tool shells out to the LST-AI ``lst`` CLI; the subprocess (and helpers) are mocked
+so these run without LST-AI, a GPU, or model weights — exercising argument building,
+the annotate / segment-only paths, result parsing, and error handling.
 """
 
-import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from medmcp_neuro_ms.tools import _neuro_ms, segmentation
 from medmcp_neuro_ms.tools.segmentation import (
+    SegmentResult,
     list_ms_lesion_regions,
     segment_ms_lesions,
 )
+
+_FIND_LST = "medmcp_neuro_ms.tools.segmentation.find_lst"
+_LST_ENV = "medmcp_neuro_ms.tools.segmentation.lst_subprocess_env"
+_SUBPROCESS_RUN = "medmcp_neuro_ms.tools.segmentation.subprocess.run"
+_GPU_PRESENT = "medmcp_neuro_ms.tools._neuro_ms.gpu_present"
 
 _STATS = "Num_Lesions,Num_Vox,Lesion_Volume\n5,4236,4242.5\n"
 _ANNOT_STATS = (
@@ -26,24 +31,30 @@ _ANNOT_STATS = (
 )
 
 
-def _fake_lst_factory():
-    """Return a subprocess.run replacement that writes LST-AI's expected outputs."""
+def _mock_lst_run(
+    cmd: list[str],
+    *,
+    capture_output: bool,
+    text: bool,
+    timeout: int,
+    env: dict[str, str],
+) -> MagicMock:
+    """Fake the `lst` subprocess: write LST-AI's expected outputs, return success."""
+    out = Path(cmd[cmd.index("--output") + 1])
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "space-flair_seg-lst.nii.gz").write_bytes(b"\x1f\x8bseg")
+    (out / "lesion_stats.csv").write_text(_STATS)
+    if "--segment_only" not in cmd:
+        (out / "space-flair_desc-annotated_seg-lst.nii.gz").write_bytes(b"\x1f\x8bann")
+        (out / "annotated_lesion_stats.csv").write_text(_ANNOT_STATS)
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = ""
+    result.stderr = ""
+    return result
 
-    def fake_run(cmd, **kwargs):
-        out = Path(cmd[cmd.index("--output") + 1])
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "space-flair_seg-lst.nii.gz").write_bytes(b"\x1f\x8b\x08seg")
-        (out / "lesion_stats.csv").write_text(_STATS)
-        if "--segment_only" not in cmd:
-            (out / "space-flair_desc-annotated_seg-lst.nii.gz").write_bytes(b"\x1f\x8bann")
-            (out / "annotated_lesion_stats.csv").write_text(_ANNOT_STATS)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    return fake_run
-
-
-@pytest.fixture
-def _inputs(tmp_path: Path) -> tuple[Path, Path]:
+def _make_inputs(tmp_path: Path) -> tuple[Path, Path]:
     t1 = tmp_path / "sub-x_T1w.nii.gz"
     flair = tmp_path / "sub-x_FLAIR.nii.gz"
     t1.write_bytes(b"\x1f\x8bt1")
@@ -51,12 +62,17 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     return t1, flair
 
 
-@pytest.fixture(autouse=True)
-def _patch_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the tool runnable without LST-AI / GPU."""
-    monkeypatch.setattr(segmentation, "find_lst", lambda: "lst")
-    monkeypatch.setattr(segmentation, "lst_subprocess_env", dict)
-    monkeypatch.setattr(_neuro_ms, "gpu_present", lambda: False)
+def _run(tmp_path: Path, *, device: str = "cpu", annotate: bool = True) -> SegmentResult:
+    """Run segment_ms_lesions with the lst subprocess + helpers mocked."""
+    t1, flair = _make_inputs(tmp_path)
+    with (
+        patch(_FIND_LST, return_value="lst"),
+        patch(_LST_ENV, return_value={}),
+        patch(_SUBPROCESS_RUN, side_effect=_mock_lst_run),
+    ):
+        return segment_ms_lesions(
+            t1, flair, output_dir=tmp_path / "out", device=device, annotate=annotate
+        )
 
 
 def test_list_ms_lesion_regions() -> None:
@@ -71,56 +87,75 @@ def test_list_ms_lesion_regions() -> None:
     assert "_render" in result
 
 
-def test_segment_success_with_annotation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _inputs: tuple[Path, Path]
-) -> None:
+def test_segment_success_with_annotation(tmp_path: Path) -> None:
     """Full run parses lesion load, count, and per-region volumes; outputs are surfaced."""
-    monkeypatch.setattr(segmentation.subprocess, "run", _fake_lst_factory())
-    t1, flair = _inputs
-    out = tmp_path / "out"
-
-    res = segment_ms_lesions(t1, flair, output_dir=out, device="cpu")
+    res = _run(tmp_path, device="cpu", annotate=True)
 
     assert res["device"] == "cpu"
     assert res["lesion_count"] == 5
     assert res["total_lesion_volume_mm3"] == 4242.5
-    assert res["region_volumes_mm3"]["Periventricular"] == 3000.0
+    regions = res["region_volumes_mm3"]
+    assert regions is not None
+    assert regions["Periventricular"] == 3000.0
     assert Path(res["lesion_mask_path"]).exists()
-    assert Path(res["annotated_mask_path"]).exists()
-    # outputs are stem-prefixed under output_dir
     assert Path(res["lesion_mask_path"]).name == "sub-x_FLAIR_seg-lst.nii.gz"
+    annotated = res["annotated_mask_path"]
+    assert annotated is not None
+    assert Path(annotated).exists()
 
 
-def test_segment_only_skips_annotation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _inputs: tuple[Path, Path]
-) -> None:
+def test_segment_only_skips_annotation(tmp_path: Path) -> None:
     """annotate=False passes --segment_only and yields no annotated outputs."""
-    monkeypatch.setattr(segmentation.subprocess, "run", _fake_lst_factory())
-    t1, flair = _inputs
-
-    res = segment_ms_lesions(t1, flair, output_dir=tmp_path / "out", annotate=False)
-
+    res = _run(tmp_path, device="cpu", annotate=False)
     assert res["annotated_mask_path"] is None
     assert res["region_volumes_mm3"] is None
     assert res["lesion_count"] == 5
 
 
-def test_auto_device_resolves_to_cpu_without_gpu(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _inputs: tuple[Path, Path]
-) -> None:
+def test_segment_only_passes_flag(tmp_path: Path) -> None:
+    """The --segment_only flag is forwarded to the lst CLI when annotate=False."""
+    t1, flair = _make_inputs(tmp_path)
+    with (
+        patch(_FIND_LST, return_value="lst"),
+        patch(_LST_ENV, return_value={}),
+        patch(_SUBPROCESS_RUN, side_effect=_mock_lst_run) as mock_run,
+    ):
+        segment_ms_lesions(t1, flair, output_dir=tmp_path / "out", device="cpu", annotate=False)
+    cmd = mock_run.call_args[0][0]
+    assert "--segment_only" in cmd
+    assert "--stripped" not in cmd
+
+
+def test_already_stripped_passes_flag(tmp_path: Path) -> None:
+    """already_stripped forwards --stripped to the lst CLI."""
+    t1, flair = _make_inputs(tmp_path)
+    with (
+        patch(_FIND_LST, return_value="lst"),
+        patch(_LST_ENV, return_value={}),
+        patch(_SUBPROCESS_RUN, side_effect=_mock_lst_run) as mock_run,
+    ):
+        segment_ms_lesions(
+            t1, flair, output_dir=tmp_path / "out", device="cpu", already_stripped=True
+        )
+    assert "--stripped" in mock_run.call_args[0][0]
+
+
+def test_auto_device_resolves_to_cpu_without_gpu(tmp_path: Path) -> None:
     """device='auto' -> 'cpu' when no GPU is visible."""
-    monkeypatch.setattr(segmentation.subprocess, "run", _fake_lst_factory())
-    monkeypatch.setattr(segmentation, "resolve_device", _neuro_ms.resolve_device)
-    t1, flair = _inputs
-
-    res = segment_ms_lesions(t1, flair, output_dir=tmp_path / "out", device="auto")
-
+    t1, flair = _make_inputs(tmp_path)
+    with (
+        patch(_FIND_LST, return_value="lst"),
+        patch(_LST_ENV, return_value={}),
+        patch(_GPU_PRESENT, return_value=False),
+        patch(_SUBPROCESS_RUN, side_effect=_mock_lst_run),
+    ):
+        res = segment_ms_lesions(t1, flair, output_dir=tmp_path / "out", device="auto")
     assert res["device"] == "cpu"
 
 
-def test_missing_input_raises(tmp_path: Path, _inputs: tuple[Path, Path]) -> None:
+def test_missing_input_raises(tmp_path: Path) -> None:
     """A missing input raises FileNotFoundError before invoking LST-AI."""
-    t1, _ = _inputs
+    t1, _ = _make_inputs(tmp_path)
     with pytest.raises(FileNotFoundError):
         segment_ms_lesions(t1, tmp_path / "absent_FLAIR.nii.gz", output_dir=tmp_path / "o")
 
@@ -135,15 +170,28 @@ def test_non_niigz_input_raises(tmp_path: Path) -> None:
         segment_ms_lesions(t1, flair, output_dir=tmp_path / "o")
 
 
-def test_failure_when_no_output(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _inputs: tuple[Path, Path]
-) -> None:
+def test_failure_when_no_output(tmp_path: Path) -> None:
     """If LST-AI writes no mask, a RuntimeError is raised."""
 
-    def fake_run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+    def _no_output_run(
+        cmd: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+        env: dict[str, str],
+    ) -> MagicMock:
+        result = MagicMock()
+        result.returncode = 1
+        result.stdout = ""
+        result.stderr = "boom"
+        return result
 
-    monkeypatch.setattr(segmentation.subprocess, "run", fake_run)
-    t1, flair = _inputs
-    with pytest.raises(RuntimeError, match="LST-AI failed"):
+    t1, flair = _make_inputs(tmp_path)
+    with (
+        patch(_FIND_LST, return_value="lst"),
+        patch(_LST_ENV, return_value={}),
+        patch(_SUBPROCESS_RUN, side_effect=_no_output_run),
+        pytest.raises(RuntimeError, match="LST-AI failed"),
+    ):
         segment_ms_lesions(t1, flair, output_dir=tmp_path / "out", device="cpu")
