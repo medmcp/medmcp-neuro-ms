@@ -35,9 +35,9 @@ Both are baked so the stack runs with `--network none` (no runtime downloads).
 
 ### Hardware requirements
 
-GPU stack: a CUDA GPU is recommended (HD-BET on torch-CUDA, ONNX ensemble on the CUDA
-execution provider). CPU fallback works but is substantially slower. The image builds on
-`medmcp-base` (CUDA 12.8 runtime); `onnxruntime-gpu` is pinned to the matching CUDA-12 line.
+GPU stack: a CUDA GPU is recommended (HD-BET and the UNet3D ensemble both run on
+torch-CUDA, the latter via onnx2torch). CPU fallback works but is substantially slower.
+The image builds on `medmcp-base` (CUDA 12.8 runtime); torch is pinned to the cu128 build.
 
 ---
 
@@ -45,7 +45,7 @@ execution provider). CPU fallback works but is substantially slower. The image b
 
 Two environments by design (mirrors the FastSurfer pattern in `medmcp-neuro`):
 
-- **`/opt/lst-venv`** — LST-AI and its heavy CUDA stack (torch cu128, onnxruntime-gpu),
+- **`/opt/lst-venv`** — LST-AI and its heavy CUDA stack (torch cu128 + onnx2torch),
   isolated and invoked as the `lst` CLI subprocess.
 - **`/app/.venv`** — the light MCP wrapper (`mcp` + this package) that builds the `lst`
   command, runs it (with the venv bin on `PATH` and the CUDA libs on `LD_LIBRARY_PATH`),

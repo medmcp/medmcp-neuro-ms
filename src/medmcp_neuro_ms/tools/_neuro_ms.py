@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-# LST-AI lives in its own venv (its torch + onnxruntime-gpu are kept apart from the
+# LST-AI lives in its own venv (its heavy torch/CUDA stack is kept apart from the
 # lightweight mcp wrapper env); the image installs the `lst` CLI here.
 _LST_VENV = Path(os.environ.get("LST_AI_VENV", "/opt/lst-venv"))
 
@@ -73,9 +73,9 @@ def lst_subprocess_env() -> dict[str, str]:
     """Build the environment for the ``lst`` subprocess.
 
     LST-AI shells out to ``hd-bet`` (and runs in its own venv), so the venv's bin dir
-    must be on PATH. onnxruntime-gpu also needs the CUDA runtime/cuDNN/cuBLAS shared
-    libs; in /opt/lst-venv these come from torch's bundled ``nvidia-*-cu12`` packages
-    (and torch/lib), so expose them on LD_LIBRARY_PATH for the CUDA execution provider.
+    must be on PATH. torch (HD-BET and the onnx2torch UNet3D ensemble) needs the CUDA
+    runtime/cuDNN/cuBLAS shared libs; in /opt/lst-venv these come from torch's bundled
+    ``nvidia-*-cu12`` packages (and torch/lib), so expose them on LD_LIBRARY_PATH.
     The CA bundle env (set on the image) is inherited for any first-run downloads.
     """
     env = dict(os.environ)

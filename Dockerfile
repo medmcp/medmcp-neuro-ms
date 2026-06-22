@@ -7,9 +7,9 @@
 #
 # Two environments by design:
 #   /app/.venv     — the light MCP wrapper (just `mcp` + this package).
-#   /opt/lst-venv  — LST-AI and its heavy CUDA stack (torch cu128 for HD-BET,
-#                    onnxruntime-gpu for the ONNX ensemble), kept isolated and invoked
-#                    as the `lst` subprocess. Mirrors the FastSurfer pattern in medmcp-neuro.
+#   /opt/lst-venv  — LST-AI and its heavy CUDA stack (torch cu128 for HD-BET AND the
+#                    UNet3D ensemble via onnx2torch), kept isolated and invoked as the
+#                    `lst` subprocess. Mirrors the FastSurfer pattern in medmcp-neuro.
 ARG BASE_IMAGE=medmcp-base:dev
 FROM ${BASE_IMAGE} AS runtime
 
@@ -41,19 +41,17 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 
 # ── LST-AI env (/opt/lst-venv) ──────────────────────────────────────────────────
 # Built BEFORE copying src so wrapper-code edits don't re-trigger this ~10GB install.
-# Install LST-AI from the fork with the GPU extra (onnxruntime-gpu). torch (pulled by
-# HD-BET) is pinned to the CUDA 12.8 (cu128) build so it runs on any host driver >= R570.
-# onnxruntime-gpu is pinned to the CUDA-12 line that matches that base (the [gpu] extra
-# is intentionally unversioned in the fork — the deployment owns the CUDA pin; pip has no
-# CUDA marker, so it is stated explicitly here). Validated: onnxruntime-gpu 1.20.1.
+# LST-AI runs its UNet3D ensemble through PyTorch (via onnx2torch), the same torch the
+# fork uses for HD-BET — so a single CUDA stack covers brain extraction AND inference.
+# torch is pinned to the CUDA 12.8 (cu128) build so it runs on any host driver >= R570;
+# onnx + onnx2torch come from the fork's deps. (Dropped onnxruntime-gpu: the ORT CUDA
+# arena spiked ~40 GB at init and OOM'd under GPU contention — see the fork's segment.py.)
 ARG LST_AI_REF=v1.3.0
-ARG ONNXRUNTIME_GPU="onnxruntime-gpu==1.20.1"
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv --python 3.12 /opt/lst-venv \
  && uv pip install --python /opt/lst-venv \
         --torch-backend=cu128 --index-strategy unsafe-best-match \
-        "lst-ai[gpu] @ git+https://github.com/jqmcginnis/LST-AI@${LST_AI_REF}" \
-        "${ONNXRUNTIME_GPU}"
+        "lst-ai @ git+https://github.com/jqmcginnis/LST-AI@${LST_AI_REF}"
 
 # Bake weights so the stack runs with --network none (no runtime download):
 #  - LST-AI model + MNI atlas: download_data() unpacks beside the `lst` script, i.e. the

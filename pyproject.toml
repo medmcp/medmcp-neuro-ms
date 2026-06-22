@@ -27,9 +27,9 @@ classifiers = [
 ]
 keywords = ["medical", "image processing", "ai-agent", "mcp", "multiple sclerosis", "lesion segmentation", "lst-ai"]
 requires-python = ">=3.12"
-# The wrapper venv stays light: just MCP. LST-AI (ONNX + picsl-greedy + HD-BET v2) and
-# its torch/onnxruntime-gpu stack are installed into an isolated venv (/opt/lst-venv) by
-# the Dockerfile and invoked as the `lst` subprocess — see tools/_neuro_ms.py.
+# The wrapper venv stays light: just MCP. LST-AI (UNet3D ensemble via onnx2torch +
+# picsl-greedy + HD-BET v2) and its torch/CUDA stack are installed into an isolated venv
+# (/opt/lst-venv) by the Dockerfile and invoked as the `lst` subprocess — see _neuro_ms.py.
 dependencies = [
     "mcp>=1.0",
 ]
