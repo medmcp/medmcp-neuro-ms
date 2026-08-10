@@ -11,6 +11,23 @@
 #                    UNet3D ensemble via onnx2torch), kept isolated and invoked as the
 #                    `lst` subprocess. Mirrors the FastSurfer pattern in medmcp-neuro.
 ARG BASE_IMAGE=medmcp-base:dev
+
+# ── picsl-greedy wheel for arm64 (builder stage) ─────────────────────────────────
+# picsl-greedy ships no linux aarch64 wheel, so lst-ai cannot resolve on arm64 and
+# this stack would stay amd64-only. Build one here. Isolated in its own stage so the
+# C++ toolchain, VTK/ITK sources and ~GBs of build tree never reach the runtime image
+# — only the finished wheel is copied across. On amd64 the script is a no-op and this
+# stage costs a few seconds. See docker/build-greedy-wheel.sh and
+# pyushkevich/greedy_python#6.
+FROM ${BASE_IMAGE} AS greedy-wheel
+ARG CMAKE_BUILD_PARALLEL_LEVEL=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git ca-certificates \
+        zlib1g-dev libpng-dev libjpeg-dev libtiff-dev python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/build-greedy-wheel.sh /usr/local/bin/build-greedy-wheel.sh
+RUN /usr/local/bin/build-greedy-wheel.sh
+
 FROM ${BASE_IMAGE} AS runtime
 
 # Stack metadata for one-click install/discovery (read via `docker inspect`). GPU stack.
@@ -47,11 +64,17 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 # onnx + onnx2torch come from the fork's deps. (Dropped onnxruntime-gpu: the ORT CUDA
 # arena spiked ~40 GB at init and OOM'd under GPU contention — see the fork's segment.py.)
 ARG LST_AI_REF=v1.3.0
+# Empty on amd64, one wheel on arm64.
+COPY --from=greedy-wheel /wheels /tmp/greedy-wheels
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv --python 3.12 /opt/lst-venv \
+ && if ls /tmp/greedy-wheels/picsl_greedy-*.whl >/dev/null 2>&1; then \
+        uv pip install --python /opt/lst-venv /tmp/greedy-wheels/picsl_greedy-*.whl; \
+    fi \
  && uv pip install --python /opt/lst-venv \
         --torch-backend=cu128 --index-strategy unsafe-best-match \
-        "lst-ai @ git+https://github.com/jqmcginnis/LST-AI@${LST_AI_REF}"
+        "lst-ai @ git+https://github.com/jqmcginnis/LST-AI@${LST_AI_REF}" \
+ && rm -rf /tmp/greedy-wheels
 
 # Bake weights so the stack runs with --network none (no runtime download):
 #  - LST-AI model + MNI atlas: download_data() unpacks beside the `lst` script, i.e. the
