@@ -15,7 +15,10 @@ set -euo pipefail
 
 WHEELHOUSE="${WHEELHOUSE:-/wheels}"
 GREEDY_PY_REPO="${GREEDY_PY_REPO:-https://github.com/jqmcginnis/greedy_python}"
-GREEDY_PY_REF="${GREEDY_PY_REF:-feat/linux-aarch64-wheels}"
+# Pinned to a commit, not a branch: a branch would let the contents of this image
+# change without any commit here, which is exactly what reproducibility for a medical
+# imaging stack must not allow. Update deliberately.
+GREEDY_PY_REF="${GREEDY_PY_REF:-22570fe9ee8945b2d1b7a9de5c4f078ab3097850}"
 
 mkdir -p "${WHEELHOUSE}"
 
@@ -49,9 +52,16 @@ export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
-git clone --depth 1 -b "${GREEDY_PY_REF}" "${GREEDY_PY_REPO}" "${work}/greedy_python"
+# `git clone -b` only accepts branches and tags, so fetch the pinned commit directly.
+# GitHub allows fetching an arbitrary reachable SHA, which keeps this shallow.
+mkdir -p "${work}/greedy_python"
 cd "${work}/greedy_python"
-git submodule update --init --recursive
+git init -q .
+git remote add origin "${GREEDY_PY_REPO}"
+git fetch -q --depth 1 origin "${GREEDY_PY_REF}"
+git checkout -q FETCH_HEAD
+git submodule update --init --recursive --depth 1
+echo "build-greedy-wheel: greedy_python at $(git rev-parse HEAD)"
 
 # Builds Eigen, VTK (from source on aarch64) and ITK into be/install, then greedy's
 # C++ libraries. The argument selects the platform branch inside the script.
