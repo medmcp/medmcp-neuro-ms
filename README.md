@@ -1,99 +1,195 @@
 # medmcp-neuro-ms
 
-MS white-matter **lesion segmentation** stack for the [medmcp](https://github.com/medmcp)
-ecosystem. It wraps [LST-AI](https://github.com/CompImg/LST-AI) — a deep-learning UNet3D
-ensemble — as an **MCP (Model Context Protocol) server** over stdio, so an LLM agent can
-segment MS lesions and quantify lesion load from a T1w + FLAIR pair.
+Multiple-sclerosis lesion segmentation for the [medmcp](https://github.com/medmcp) ecosystem. Exposes an **MCP (Model Context Protocol) server** over stdio that an LLM agent can invoke to segment MS white-matter lesions and quantify lesion load from a T1w + FLAIR pair. Wraps [LST-AI](https://github.com/CompImg/LST-AI).
+
+<p align="center">
+  <a href="https://medmcp.ai"><b>medmcp.ai</b></a> ·
+  <a href="https://github.com/medmcp/medmcp">Main repository</a>
+</p>
+
+> [!NOTE]
+> **This repository is for developers** who build, extend, or run the MS lesion segmentation stack from source. **If you just want to use MedMCP, you don't need this repo** — install the MedMCP app and add this stack through the workspace UI (one-click install). See [medmcp.ai](https://medmcp.ai) or the [main repository](https://github.com/medmcp/medmcp) to get started.
 
 > [!WARNING]
-> Research software, **not licensed for clinical use**. LST-AI is a research-only tool for
-> MS lesion segmentation and has not been validated/approved for clinical usage.
+> MedMCP and its ecosystem are research software under active development and are
+> **not licensed for clinical use**. LST-AI is a research-only tool for MS lesion
+> segmentation; its output is an estimate, not a clinical finding.
 
 ---
 
 ## Tool inventory
 
-| Tool name | Description | Inputs | Key outputs |
+| Tool name | Description | Inputs | Outputs |
 |---|---|---|---|
-| `segment_ms_lesions` | Run LST-AI (registration → HD-BET skull strip → PyTorch UNet3D ensemble → optional FastSurfer-based region annotation) on a T1w + FLAIR pair | `t1_path`, `flair_path`, `output_dir`, `device="auto"`, `already_stripped=False`, `annotate=True`, `threads=4` | binary lesion mask (FLAIR space), annotated region map, `total_lesion_volume_mm3`, `lesion_count`, `region_volumes_mm3` |
-| `list_ms_lesion_regions` | List the McDonald-criteria lesion regions LST-AI annotates | — | `Periventricular`, `Juxtacortical`, `Subcortical`, `Infratentorial` |
+| `segment_ms_lesions` | Segment MS white-matter lesions on a co-registered T1w + FLAIR pair and quantify lesion load | `t1_path: Path`, `flair_path: Path`, `output_dir: Path?`, `device: "auto"\|GPU id\|"cpu"`, `already_stripped: bool`, `annotate: bool`, `threads: int` | Binary lesion mask in FLAIR space, a McDonald-region-annotated map, per-lesion stats CSVs, `total_lesion_volume_mm3`, `lesion_count`, `region_volumes_mm3`, and the resolved device |
+| `list_ms_lesion_regions` | List the McDonald-criteria lesion regions LST-AI annotates | — | 4 regions |
 
-- **Annotated vs. binary:** `annotate=True` (default) produces the 4-region map +
-  per-region volumes; `annotate=False` (`--segment_only`) yields only the binary mask.
-- **Skull stripping:** done internally by HD-BET; set `already_stripped=True` only when
-  **both** inputs are already skull-stripped.
+## Pipeline
 
-### Model / weights provenance
+`segment_ms_lesions` runs the full LST-AI v2 pipeline in one call: registration to MNI
+space (greedy) → skull stripping (HD-BET) → a three-model UNet3D ensemble (native
+PyTorch, `.pt` checkpoints) → optional region annotation derived from a FastSurfer
+seg-only aseg. Both a T1w and a FLAIR of the same session are required — LST-AI is a
+T1+FLAIR method and no other contrast can substitute.
 
-- **LST-AI** — installed from PyPI, pinned to **`lst-ai==2.0.0rc1`** (a pip-only,
-  multi-arch stack: native-PyTorch inference from `.pt` checkpoints, `picsl-greedy`
-  registration, `brainles_hd_bet`; no TensorFlow, no ONNX Runtime). The `.pt` ensemble
-  was exported from the v1.3.0 ONNX graphs and is tensor-for-tensor identical; the
-  3-model UNet3D ensemble + MNI atlas are fetched by LST-AI's `download_data` from the
-  upstream `v2.0.0-data` release (decoupled from code tags) and **baked into the image**.
-- **HD-BET** parameters (all 5 folds, `brainles_hd_bet` — the HD-BET version the
-  released weights were validated against) — baked at build time.
-- **FastSurfer** `v2.5.4` + FastSurferVINN (asegdkt) checkpoints — used by the seg-only
-  annotation path. Installed and resolved by LST-AI itself (`python -m lst_ai.fastsurfer
-  --checkpoints`, pinned release tarball) — baked at build time.
-- **picsl-greedy** — from PyPI on both arches (official aarch64 wheels since 1.4.0.1).
+- **Annotated vs. binary:** `annotate=True` (default) also produces a region-annotated
+  map and per-region volumes; `annotate=False` (`--segment_only`) yields only the
+  binary mask and skips the FastSurfer pass.
+- **Skull stripping** is done internally by HD-BET; set `already_stripped=True` only
+  when **both** inputs are already skull-stripped.
 
-Everything is baked **and asserted** at build time (plus re-checked offline in CI), so
-the stack runs with `--network none` and never starts a job whose weights are missing.
+The annotated map assigns each lesion to one of the four McDonald-criteria regions —
+`Periventricular`, `Juxtacortical`, `Subcortical`, `Infratentorial` — which are the
+rows of the annotated stats CSV (volumes in mm³).
 
-### Hardware requirements
+## Skill inventory
 
-GPU stack: a CUDA GPU is recommended (HD-BET, the UNet3D ensemble, and FastSurfer all
-run on torch-CUDA). CPU fallback works but is substantially slower — annotation in
-particular adds a FastSurfer seg-only pass. Images are published for **linux/amd64 and
-linux/arm64** (multi-arch manifest).
-The image builds on `medmcp-base` (CUDA 12.8 runtime); torch is pinned to the cu128 build.
+Skills are SKILL.md files the agent loads on demand to follow multi-step workflows. They are bundled under `src/medmcp_neuro_ms/skills/` and discovered automatically via `server_config()`.
+
+| Skill name | Description |
+|---|---|
+| `ms-lesion-segmentation` | Workflow for MS lesion segmentation and lesion-load quantification. Covers identifying the T1w and FLAIR by contrast, when LST-AI cannot run (a single contrast is not enough), device selection, and reading total and per-region lesion volumes out of the stats CSVs in mm³. |
 
 ---
 
-## Architecture
+### Bundled tools
 
-Two environments by design (mirrors the FastSurfer pattern in `medmcp-neuro-core`):
+| Tool / weights | Used by | Source | License |
+|---|---|---|---|
+| LST-AI (`lst-ai`, pinned `2.0.0rc1`) | `segment_ms_lesions` | [upstream](https://github.com/CompImg/LST-AI); `.pt` ensemble + MNI atlas from the `v2.0.0-data` release, baked into the image | [MIT](https://github.com/CompImg/LST-AI/blob/main/LICENSE) |
+| greedy (`picsl-greedy`) | registration to MNI | [upstream](https://github.com/pyushkevich/greedy), dependency | Apache-2.0 |
+| HD-BET (`brainles_hd_bet`) | skull stripping | [upstream](https://github.com/BrainLesion/HD-BET); all 5 parameter folds baked | AGPL-3.0 |
+| FastSurfer `v2.5.4` | region annotation (seg-only FastSurferVINN) | [upstream](https://github.com/Deep-MI/FastSurfer), installed by LST-AI; VINN checkpoints baked | [Apache-2.0](https://github.com/Deep-MI/FastSurfer/blob/dev/LICENSE) |
 
-- **`/opt/lst-venv`** — LST-AI + FastSurfer and their shared CUDA stack (one torch cu128),
-  isolated and invoked as the `lst` CLI subprocess.
-- **`/app/.venv`** — the light MCP wrapper (`mcp` + this package) that builds the `lst`
-  command, runs it (with the venv bin on `PATH` and the CUDA libs on `LD_LIBRARY_PATH`),
-  and parses the lesion mask + stats into the tool result.
+Everything the pipeline can touch is fetched **and asserted** at build time (and
+re-checked offline in CI), so the stack runs with `--network none` and never starts a
+job whose weights are missing.
 
-This is a GPU stack (`org.medmcp.stack` → `"gpu": true`); the core launches it with
-`--device nvidia.com/gpu=all` (CDI).
+### Citation
 
-## Build & run
+Results produced with this stack should cite the underlying work, not this package:
+
+- **LST-AI** — Wiltgen T, McGinnis J, Schlaeger S, et al. LST-AI: A deep learning
+  ensemble for accurate MS lesion segmentation. *NeuroImage: Clinical* 42:103611
+  (2024). [doi:10.1016/j.nicl.2024.103611](https://doi.org/10.1016/j.nicl.2024.103611)
+- **HD-BET** — Isensee F, et al. Automated brain extraction of multisequence MRI using
+  artificial neural networks. *Human Brain Mapping* 40(17):4952–4964 (2019).
+  [doi:10.1002/hbm.24750](https://doi.org/10.1002/hbm.24750)
+- **greedy** — Yushkevich PA, et al. Fast Automatic Segmentation of Hippocampal
+  Subfields and Medial Temporal Lobe Subregions in 3 Tesla and 7 Tesla T2-Weighted
+  MRI. *Alzheimer's & Dementia* 12:P126–P127 (2016).
+  [doi:10.1016/j.jalz.2016.06.205](https://doi.org/10.1016/j.jalz.2016.06.205)
+- **FastSurfer** (for `annotate=True`) — cite both, as FastSurfer itself asks:
+  Henschel L, et al. FastSurfer — A fast and accurate deep learning based neuroimaging
+  pipeline. *NeuroImage* 219:117012 (2020).
+  [doi:10.1016/j.neuroimage.2020.117012](https://doi.org/10.1016/j.neuroimage.2020.117012);
+  and Henschel L, et al. FastSurferVINN: Building resolution-independence into deep
+  learning segmentation methods. *NeuroImage* 251:118933 (2022).
+  [doi:10.1016/j.neuroimage.2022.118933](https://doi.org/10.1016/j.neuroimage.2022.118933)
+
+Full third-party attribution belongs in [`NOTICE`](NOTICE).
+
+### Hardware requirements
+
+- `segment_ms_lesions`: CUDA GPU recommended — HD-BET, the UNet3D ensemble, and
+  FastSurfer all run on torch-CUDA; registration (greedy) is CPU either way. CPU
+  fallback works but is substantially slower; `annotate=True` adds a FastSurfer
+  seg-only pass, which is why the stack's tool timeout is 3600 s.
+- Disk: the image is large — about 13 GB, most of it the CUDA/PyTorch stack (one
+  torch cu128 shared by HD-BET, the ensemble, and FastSurfer) plus the baked weights.
+- This is a GPU stack (`org.medmcp.stack` → `"gpu": true`); the core launches it with
+  `--device nvidia.com/gpu=all` (CDI). Images are published for **linux/amd64 and
+  linux/arm64** (multi-arch manifest).
+- **Runs fully offline.** Every model is baked into the image and nothing is
+  downloaded at run time.
+
+---
+
+## Development
+
+### Develop in the dev container (recommended)
+
+This repo ships a dev container (`.devcontainer/`) with the full toolchain
+(Python 3.12 + uv, `just`, git, Docker CLI). It derives from the shared
+`medmcp-base` image, so build that once from the core repo first (`just docker-base`
+in a `medmcp` checkout). Then open the repo with the **Dev Container** action in
+PyCharm (2024.2+) or **Reopen in Container** in VS Code — `uv sync` runs on first
+start. See the core repo's [CONTRIBUTING](https://github.com/medmcp/medmcp/blob/main/CONTRIBUTING.md)
+for IDE specifics.
+
+### Local install (alternative)
 
 ```bash
-# build (needs the shared medmcp-base image: `just docker-base` in the core repo)
-DOCKER_BUILDKIT=1 docker build -t medmcp-neuro-ms:dev .
-
-# the core launches stacks; to exercise the tool directly:
-docker run --rm --network none --device nvidia.com/gpu=all \
-  -v /path/to/data:/data:ro -v /path/to/out:/out \
-  --entrypoint /app/.venv/bin/python medmcp-neuro-ms:dev -c "
-from pathlib import Path
-from medmcp_neuro_ms.tools.segmentation import segment_ms_lesions
-print(segment_ms_lesions(Path('/data/T1w.nii.gz'), Path('/data/FLAIR.nii.gz'),
-                         output_dir=Path('/out'), device='auto'))"
+just setup     # install uv, sync dev environment, register pre-commit hooks
+just check     # lint + format-check + typecheck + tests
+just fix       # auto-fix lint and format
 ```
+
+For local agent use, install the stack into its own uv tool environment:
+
+```bash
+uv tool install --editable .
+```
+
+The package registers itself via the `[medmcp.stacks]` entry point. The local
+agent autodiscovers it on the next session — no manual config needed.
+
+### Container image (deployment)
+
+```bash
+just docker-build           # build the stack image (FROM medmcp-base)
+```
+
+It is a stdio MCP server. The medmcp **core** launches it on demand via a
+`stacks.d/medmcp-neuro-ms.toml` manifest (`docker run -i …`; GPU stacks add
+`--device nvidia.com/gpu=all`, CDI), so deployment nodes need no host Python
+install. Build both architectures — the core refuses to install a foreign-arch
+image rather than failing later with "exec format error". Pin any GPU/CUDA build
+in `pyproject.toml` against the fleet driver floor (CUDA 12.8 / driver R570).
+
+Two environments by design (mirrors the FastSurfer pattern in `medmcp-neuro-core`):
+**`/opt/lst-venv`** holds LST-AI + FastSurfer and their shared CUDA stack, isolated
+and invoked as the `lst` CLI subprocess; **`/app/.venv`** is the light MCP wrapper
+(`mcp` + this package) that builds the `lst` command, runs it, and parses the lesion
+mask + stats into the tool result.
 
 Behind a TLS-intercepting proxy, drop the proxy root CA as `*.crt` into `./certs/`
 (gitignored) before building.
 
-## Development
+### Staying in sync with the template
 
-```bash
-just setup        # uv sync
-just check        # ruff + pyright + pytest
-```
+Files shared with [medmcp-template](https://github.com/medmcp/medmcp-template) are
+listed in `scripts/shared-files.txt`. The **Template drift** workflow reports when
+one of them diverges; `./scripts/sync-from-template.sh` pulls them back. A change
+that belongs in every stack goes in the template, not here.
 
-## Citation
+---
 
-If you use this stack, please cite LST-AI:
+## Contributing
 
-> Wiltgen T, McGinnis J, Schlaeger S, et al. *LST-AI: A deep learning ensemble for accurate
-> MS lesion segmentation.* NeuroImage: Clinical, Vol. 42, 2024.
-> https://doi.org/10.1016/j.nicl.2024.103611
+See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: fork, `just setup`, `just check`, open a PR against `main`.
+
+### Contributors
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jqmcginnis"><img src="https://avatars.githubusercontent.com/u/33037028?v=4?s=100" width="100px;" alt="Julian McGinnis"/><br /><sub><b>Julian McGinnis</b></sub></a><br /><a href="https://github.com/medmcp/medmcp-neuro-ms/commits?author=jqmcginnis" title="Code">💻</a> <a href="https://github.com/medmcp/medmcp-neuro-ms/commits?author=jqmcginnis" title="Documentation">📖</a> <a href="#maintenance-jqmcginnis" title="Maintenance">🚧</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+
+This project follows the [all-contributors](https://allcontributors.org) specification — contributions of any kind are welcome!
+
+## License
+
+[Apache 2.0](LICENSE). Third-party tools, model weights, and templates bundled by
+this stack retain their own licenses and are attributed in [`NOTICE`](NOTICE).

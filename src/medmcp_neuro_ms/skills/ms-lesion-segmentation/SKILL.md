@@ -7,7 +7,7 @@ compatibility: Requires the medmcp-neuro-ms MCP server (console script medmcp-ne
 
 # MS lesion segmentation & lesion-load workflow
 
-`segment_ms_lesions` runs **LST-AI** — a deep-learning UNet3D ensemble (ONNX) — to
+`segment_ms_lesions` runs **LST-AI** — a deep-learning UNet3D ensemble (native PyTorch) — to
 segment MS white-matter lesions and report **total lesion load** (volume mm³), lesion
 **count**, and a per-region breakdown. It does its own registration to MNI
 (picsl-greedy) and skull stripping (HD-BET), so you only provide the raw scans.

@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Template alignment to the ecosystem standard (as in medmcp-totalsegmentator):
+  `NOTICE` with per-component licenses and citations (LST-AI MIT, HD-BET AGPL-3.0,
+  greedy Apache-2.0, FastSurfer Apache-2.0), `scripts/shared-files.txt` +
+  `sync-from-template.sh`, the Template-drift workflow, and all-contributors.
+
 ### Changed
+
+- README rewritten to the ecosystem documentation standard: tool/skill inventories,
+  pipeline description, bundled-tools table with licenses, citation section with DOIs,
+  hardware requirements, and template-sync docs.
+- CONTRIBUTING regenerated from the current template; ci.yml re-synced (checkout v7).
 
 - LST-AI now installs from PyPI (`lst-ai==2.0.0rc1`) instead of a git fork; picsl-greedy
   resolves from official PyPI wheels on both amd64 and arm64 (the custom aarch64 wheel
