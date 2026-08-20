@@ -1,14 +1,15 @@
-"""MS lesion segmentation using LST-AI (ONNX deep-learning ensemble).
+"""MS lesion segmentation using LST-AI v2 (PyTorch deep-learning ensemble).
 
 Runs the LST-AI pipeline on a co-registered **T1w + FLAIR** pair:
-registration to MNI (picsl-greedy) → skull stripping (HD-BET v2) → an ONNX UNet3D
-ensemble lesion segmentation → optional region annotation by McDonald criteria
-(periventricular / juxtacortical / subcortical / infratentorial). Outputs the binary
-lesion mask in FLAIR space, the region-annotated map, the total lesion load and count,
-and per-region volumes.
+registration to MNI (picsl-greedy) → skull stripping (HD-BET) → a UNet3D ensemble
+lesion segmentation (native PyTorch, .pt checkpoints) → optional region annotation by
+McDonald criteria (periventricular / juxtacortical / subcortical / infratentorial),
+derived from a FastSurfer seg-only aseg. Outputs the binary lesion mask in FLAIR
+space, the region-annotated map, the total lesion load and count, and per-region
+volumes.
 
-GPU-accelerated: HD-BET runs on torch-CUDA and the ONNX ensemble on the CUDA execution
-provider when a GPU is available; registration (greedy) is CPU either way.
+GPU-accelerated: HD-BET, the UNet3D ensemble, and FastSurfer all run on torch-CUDA
+when a GPU is available; registration (greedy) is CPU either way.
 """
 
 import csv
@@ -103,9 +104,11 @@ def segment_ms_lesions(
 ) -> SegmentResult:
     """Segment multiple-sclerosis lesions from a T1w + FLAIR pair using LST-AI.
 
-    LST-AI registers the images to MNI, skull-strips them (HD-BET), runs an ONNX UNet3D
-    ensemble to produce a binary lesion mask in FLAIR space, and (by default) annotates
-    each lesion by region per McDonald criteria. Both a T1w and a FLAIR are required.
+    LST-AI registers the images to MNI, skull-strips them (HD-BET), runs a UNet3D
+    ensemble (native PyTorch) to produce a binary lesion mask in FLAIR space, and (by
+    default) annotates each lesion by region per McDonald criteria using a FastSurfer
+    seg-only aseg. Both a T1w and a FLAIR are required. Annotation adds a FastSurfer
+    pass, so annotate=True runs noticeably longer — especially on CPU.
 
     Args:
         t1_path: Absolute path to the T1w image (.nii.gz).
@@ -170,7 +173,7 @@ def segment_ms_lesions(
             flush=True,
         )
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=1800, env=lst_subprocess_env()
+            cmd, capture_output=True, text=True, timeout=3600, env=lst_subprocess_env()
         )
         if proc.stderr:
             sys.stderr.write(proc.stderr)

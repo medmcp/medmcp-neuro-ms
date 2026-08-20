@@ -18,7 +18,11 @@ def server_config() -> dict[str, object]:
         "name": "medmcp-neuro-ms",
         "command": "medmcp-neuro-ms",
         "skills_path": str(_pkg_files("medmcp_neuro_ms") / "skills"),
-        "tool_timeout_sec": 1800.0,
+        # 3600, not 1800: the v2 annotation path adds a FastSurfer seg-only pass,
+        # which on CPU can push a run past the old budget. Keep in sync with the
+        # org.medmcp.stack label in the Dockerfile and the subprocess timeout in
+        # tools/segmentation.py.
+        "tool_timeout_sec": 3600.0,
     }
 
 

@@ -1,12 +1,27 @@
 name: Image
 
-# On push to main: build + push the neuro-ms GPU stack image to the private GHCR.
-# On pull_request: build only (validates the Dockerfile) — no push.
+# On push to main: build the neuro-ms GPU stack image on a NATIVE runner per
+# architecture, smoke-test each natively, push arch-suffixed tags, then merge them
+# into a multi-arch manifest list so ghcr.io/medmcp/neuro-ms:main resolves per-arch.
+# On pull_request / workflow_dispatch: build + smoke-test both arches, no push, no merge.
+#
+# Each arch builds natively — do NOT collapse this into a single buildx
+# --platform linux/amd64,linux/arm64 build. QEMU is far too slow for the CUDA/torch
+# stack here, and one pattern across all repos is worth more than a shortcut
+# (see medmcp#95). Building natively also means the smoke tests actually exercise
+# the arm64 image rather than an emulated one.
+#
 # FROM ghcr.io/medmcp/base — the base package must grant this repo read access
-# (Package settings -> Manage Actions access), and base:main must already be
-# published (run medmcp-dev's Images workflow first). amd64 only for now (torch
-# cu128 for HD-BET + onnxruntime-gpu + baked LST-AI models / HD-BET weights;
-# ~13 GB, so no layer caching — see the build step).
+# (base package settings -> Manage Actions access), and base:main must already be
+# published as a multi-arch manifest (run medmcp's Images workflow first).
+#
+# No GHA layer cache: this image is ~13 GB (torch cu128 for HD-BET + the LST-AI
+# ensemble + FastSurfer, with all weights baked), over the ~10 GB Actions-cache cap,
+# and `cache-to: mode=max` exporting a second copy of every layer fills the runner
+# disk. The build fits on the hosted runners after the free-disk step.
+#
+# NOTE: ubuntu-24.04-arm is free for public repos; private repos need a paid Team
+# or Enterprise plan. Without one, swap that runner for a self-hosted aarch64 one.
 on:
   push:
     branches: [main]
@@ -19,10 +34,20 @@ permissions:
 
 jobs:
   image:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Don't cancel the sibling arch on failure — a broken arm64 build should
+      # still leave a diagnosable amd64 run, and vice versa.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
-      # The neuro-ms image is large (CUDA torch + onnxruntime-gpu + baked weights);
+      # The neuro-ms image is large (CUDA torch + FastSurfer + baked weights);
       # reclaim space the hosted runner pre-populates so the build doesn't run out.
       - name: Free disk space
         run: |
@@ -35,16 +60,102 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Build and load locally so we can smoke-test the exact image before pushing.
+      # Arch-suffixed tags are an internal handoff to the merge job; nothing outside
+      # this workflow should consume them.
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          push: false
           build-args: |
             BASE_IMAGE=ghcr.io/medmcp/base:main
           tags: |
-            ghcr.io/medmcp/neuro-ms:${{ github.sha }}
-            ghcr.io/medmcp/neuro-ms:main
-          # No GHA cache: this image is ~13 GB, over the ~10 GB Actions-cache cap, and
-          # `cache-to: mode=max` exporting a second copy of every layer fills the runner
-          # disk. The build fits on the hosted runner (after the Free-disk step), so we
-          # just skip caching.
+            ghcr.io/medmcp/neuro-ms:${{ github.sha }}-${{ matrix.arch }}
+            ghcr.io/medmcp/neuro-ms:main-${{ matrix.arch }}
+      # Smoke test: the installed package must launch and register both tools.
+      # Runs natively on each arch, so an arm64-only import failure is caught here.
+      - name: Smoke test (tool registration)
+        run: |
+          docker run --rm --entrypoint python \
+            ghcr.io/medmcp/neuro-ms:main-${{ matrix.arch }} -c "
+          import asyncio
+          from medmcp_neuro_ms.server import mcp
+          names = [t.name for t in asyncio.run(mcp.list_tools())]
+          print('registered tools:', names)
+          assert 'segment_ms_lesions' in names, names
+          assert 'list_ms_lesion_regions' in names, names
+          "
+      # Weights preflight: every model artifact the pipeline can touch must already
+      # be inside the image — LST-AI .pt ensemble, MNI atlas, all 5 HD-BET folds,
+      # the FastSurfer asegdkt checkpoint — because the stack runs --network none.
+      # Duplicates the Dockerfile asserts on purpose: this guards the assembled
+      # image (and any future layer-reordering), not the build recipe.
+      - name: Weights preflight (offline-run guarantee)
+        run: |
+          docker run --rm --network none --entrypoint /opt/lst-venv/bin/python \
+            ghcr.io/medmcp/neuro-ms:main-${{ matrix.arch }} -c "
+          import glob, os, lst_ai
+          from brainles_hd_bet.utils import get_params_fname
+          from lst_ai.fastsurfer import find_fastsurfer
+          p = os.path.dirname(lst_ai.__file__)
+          assert os.listdir(os.path.join(p, 'model')), 'LST-AI model weights missing'
+          assert os.listdir(os.path.join(p, 'atlas')), 'MNI atlas missing'
+          missing = [f for f in range(5) if not os.path.isfile(get_params_fname(f))]
+          assert not missing, f'HD-BET params missing for folds: {missing}'
+          home = find_fastsurfer()
+          assert home is not None, 'FastSurfer tree missing'
+          assert glob.glob(str(home / 'checkpoints' / '*')), 'FastSurfer checkpoint missing'
+          print('all weights present: LST-AI model+atlas, HD-BET x5, FastSurfer asegdkt')
+          "
+      # Verify the discovery label parses and matches the package.
+      - name: Check stack label
+        run: |
+          docker inspect --format '{{ index .Config.Labels "org.medmcp.stack" }}' \
+            ghcr.io/medmcp/neuro-ms:main-${{ matrix.arch }} | tee /tmp/label.json
+          python -c "import json; d=json.load(open('/tmp/label.json')); assert d['name']=='medmcp-neuro-ms' and d['gpu'] is True, d"
+      # Verify the built image really is the architecture we think it is — the core
+      # refuses to install a foreign-arch stack image (medmcp#97), so a mislabelled
+      # leg would produce a manifest list that is uninstallable on one platform.
+      - name: Check image architecture
+        run: |
+          got=$(docker image inspect ghcr.io/medmcp/neuro-ms:main-${{ matrix.arch }} \
+                  --format '{{.Architecture}}')
+          echo "built: $got, expected: ${{ matrix.arch }}"
+          [ "$got" = "${{ matrix.arch }}" ] \
+            || { echo "::error::image is $got, expected ${{ matrix.arch }}"; exit 1; }
+      - name: Push to GHCR
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          docker push ghcr.io/medmcp/neuro-ms:${{ github.sha }}-${{ matrix.arch }}
+          docker push ghcr.io/medmcp/neuro-ms:main-${{ matrix.arch }}
+
+  # Runs once, after BOTH arches have pushed. Merging the per-arch images into a
+  # manifest list is what makes the bare tag multi-arch; without this job the
+  # suffixed tags exist but ghcr.io/medmcp/neuro-ms:main would not.
+  merge:
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge arch tags into multi-arch manifest lists
+        run: |
+          for tag in "${{ github.sha }}" main; do
+            docker buildx imagetools create -t "ghcr.io/medmcp/neuro-ms:$tag" \
+              "ghcr.io/medmcp/neuro-ms:$tag-amd64" \
+              "ghcr.io/medmcp/neuro-ms:$tag-arm64"
+          done
+      - name: Verify both platforms resolve
+        run: |
+          insp=$(docker buildx imagetools inspect "ghcr.io/medmcp/neuro-ms:main")
+          echo "$insp"
+          for plat in linux/amd64 linux/arm64; do
+            echo "$insp" | grep -q "$plat" \
+              || { echo "::error::ghcr.io/medmcp/neuro-ms:main is missing $plat"; exit 1; }
+          done
+          echo "both platforms present"

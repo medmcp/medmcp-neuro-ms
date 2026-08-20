@@ -73,7 +73,7 @@ def lst_subprocess_env() -> dict[str, str]:
     """Build the environment for the ``lst`` subprocess.
 
     LST-AI shells out to ``hd-bet`` (and runs in its own venv), so the venv's bin dir
-    must be on PATH. torch (HD-BET and the onnx2torch UNet3D ensemble) needs the CUDA
+    must be on PATH. torch (HD-BET and the native-PyTorch UNet3D ensemble) needs the CUDA
     runtime/cuDNN/cuBLAS shared libs; in /opt/lst-venv these come from torch's bundled
     ``nvidia-*-cu12`` packages (and torch/lib), so expose them on LD_LIBRARY_PATH.
     The CA bundle env (set on the image) is inherited for any first-run downloads.

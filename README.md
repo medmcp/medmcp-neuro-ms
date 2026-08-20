@@ -15,7 +15,7 @@ segment MS lesions and quantify lesion load from a T1w + FLAIR pair.
 
 | Tool name | Description | Inputs | Key outputs |
 |---|---|---|---|
-| `segment_ms_lesions` | Run LST-AI (registration → HD-BET skull strip → ONNX ensemble → optional region annotation) on a T1w + FLAIR pair | `t1_path`, `flair_path`, `output_dir`, `device="auto"`, `already_stripped=False`, `annotate=True`, `threads=4` | binary lesion mask (FLAIR space), annotated region map, `total_lesion_volume_mm3`, `lesion_count`, `region_volumes_mm3` |
+| `segment_ms_lesions` | Run LST-AI (registration → HD-BET skull strip → PyTorch UNet3D ensemble → optional FastSurfer-based region annotation) on a T1w + FLAIR pair | `t1_path`, `flair_path`, `output_dir`, `device="auto"`, `already_stripped=False`, `annotate=True`, `threads=4` | binary lesion mask (FLAIR space), annotated region map, `total_lesion_volume_mm3`, `lesion_count`, `region_volumes_mm3` |
 | `list_ms_lesion_regions` | List the McDonald-criteria lesion regions LST-AI annotates | — | `Periventricular`, `Juxtacortical`, `Subcortical`, `Infratentorial` |
 
 - **Annotated vs. binary:** `annotate=True` (default) produces the 4-region map +
@@ -25,27 +25,37 @@ segment MS lesions and quantify lesion load from a T1w + FLAIR pair.
 
 ### Model / weights provenance
 
-- **LST-AI** — installed from the fork `jqmcginnis/LST-AI` at tag **`v1.3.0`** (a pip-only,
-  multi-arch stack: ONNX Runtime inference, `picsl-greedy` registration, HD-BET v2; no
-  TensorFlow). Models: a 3-model UNet3D ONNX ensemble + MNI atlas, fetched by LST-AI's
-  `download_data` from the fork's v1.3.0 release and **baked into the image**.
-- **HD-BET v2** weights — baked at build time.
+- **LST-AI** — installed from PyPI, pinned to **`lst-ai==2.0.0rc1`** (a pip-only,
+  multi-arch stack: native-PyTorch inference from `.pt` checkpoints, `picsl-greedy`
+  registration, `brainles_hd_bet`; no TensorFlow, no ONNX Runtime). The `.pt` ensemble
+  was exported from the v1.3.0 ONNX graphs and is tensor-for-tensor identical; the
+  3-model UNet3D ensemble + MNI atlas are fetched by LST-AI's `download_data` from the
+  upstream `v2.0.0-data` release (decoupled from code tags) and **baked into the image**.
+- **HD-BET** parameters (all 5 folds, `brainles_hd_bet` — the HD-BET version the
+  released weights were validated against) — baked at build time.
+- **FastSurfer** `v2.5.4` + FastSurferVINN (asegdkt) checkpoints — used by the seg-only
+  annotation path. Installed and resolved by LST-AI itself (`python -m lst_ai.fastsurfer
+  --checkpoints`, pinned release tarball) — baked at build time.
+- **picsl-greedy** — from PyPI on both arches (official aarch64 wheels since 1.4.0.1).
 
-Both are baked so the stack runs with `--network none` (no runtime downloads).
+Everything is baked **and asserted** at build time (plus re-checked offline in CI), so
+the stack runs with `--network none` and never starts a job whose weights are missing.
 
 ### Hardware requirements
 
-GPU stack: a CUDA GPU is recommended (HD-BET and the UNet3D ensemble both run on
-torch-CUDA, the latter via onnx2torch). CPU fallback works but is substantially slower.
+GPU stack: a CUDA GPU is recommended (HD-BET, the UNet3D ensemble, and FastSurfer all
+run on torch-CUDA). CPU fallback works but is substantially slower — annotation in
+particular adds a FastSurfer seg-only pass. Images are published for **linux/amd64 and
+linux/arm64** (multi-arch manifest).
 The image builds on `medmcp-base` (CUDA 12.8 runtime); torch is pinned to the cu128 build.
 
 ---
 
 ## Architecture
 
-Two environments by design (mirrors the FastSurfer pattern in `medmcp-neuro`):
+Two environments by design (mirrors the FastSurfer pattern in `medmcp-neuro-core`):
 
-- **`/opt/lst-venv`** — LST-AI and its heavy CUDA stack (torch cu128 + onnx2torch),
+- **`/opt/lst-venv`** — LST-AI + FastSurfer and their shared CUDA stack (one torch cu128),
   isolated and invoked as the `lst` CLI subprocess.
 - **`/app/.venv`** — the light MCP wrapper (`mcp` + this package) that builds the `lst`
   command, runs it (with the venv bin on `PATH` and the CUDA libs on `LD_LIBRARY_PATH`),
