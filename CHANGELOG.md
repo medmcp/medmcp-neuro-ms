@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Every tool declares its effect (read-only, writes new files, destructive) for MedMCP's approval card.
 - Template alignment to the ecosystem standard (as in medmcp-totalsegmentator):
   `NOTICE` with per-component licenses and citations (LST-AI MIT, HD-BET AGPL-3.0,
   greedy Apache-2.0, FastSurfer Apache-2.0), `scripts/shared-files.txt` +

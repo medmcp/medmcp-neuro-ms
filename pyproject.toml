@@ -32,7 +32,7 @@ requires-python = ">=3.12"
 # isolated venv (/opt/lst-venv) by the Dockerfile and invoked as the `lst` subprocess —
 # see _neuro_ms.py.
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.19,<2",
 ]
 
 [project.scripts]

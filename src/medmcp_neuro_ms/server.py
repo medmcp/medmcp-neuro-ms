@@ -4,12 +4,14 @@ from importlib.resources import files as _pkg_files
 
 from mcp.server.fastmcp import FastMCP
 
+from medmcp_neuro_ms.effects import tool_effect
 from medmcp_neuro_ms.tools.segmentation import list_ms_lesion_regions, segment_ms_lesions
 
 mcp = FastMCP("medmcp-neuro-ms")
 
-mcp.add_tool(segment_ms_lesions)
-mcp.add_tool(list_ms_lesion_regions)
+# Writes <flair stem>_seg-lst / _lesion_stats (+ annotated map and stats) into output_dir.
+mcp.add_tool(segment_ms_lesions, **tool_effect("writes_new"))
+mcp.add_tool(list_ms_lesion_regions, **tool_effect("read_only"))
 
 
 def server_config() -> dict[str, object]:
